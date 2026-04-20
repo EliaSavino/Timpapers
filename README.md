@@ -1,30 +1,62 @@
 # TimPapers
 
-Native iOS + FastAPI system for a single professor/PI to track publications, citations, h-index, i10-index, and h-index frontier opportunities.
+TimPapers is now a **pure Streamlit** application for tracking publication performance for one or more researchers.
 
-## Monorepo layout
+## What it does
 
-- `backend/` — Python 3.12 FastAPI service with SQLAlchemy persistence, metric computation, scheduled refresh jobs, and events.
-- `ios-app/` — SwiftUI iPhone app + WidgetKit extension source files.
+- Pulls author/publication data from **OpenAlex**.
+- Stores papers, citation snapshots, and metric snapshots in SQLite (or any SQLAlchemy-supported DB URL).
+- Computes core bibliometrics: total citations, h-index, i10-index, and h-index frontier groupings.
+- Presents a polished dashboard with metrics, trends, analysis charts, and drill-down tables.
 
-## Data sources
+## Repository layout
 
-- Primary: OpenAlex
-- Secondary/fallback enrichment: Semantic Scholar Academic Graph API
-- Explicitly no unofficial Google Scholar scraping.
+```text
+app.py
+pages/
+  1_Overview.py
+  2_Analysis.py
+  3_Details.py
+  4_Settings.py
+src/timpapers/
+  config.py
+  database.py
+  models.py
+  plotting/charts.py
+  services/
+    alerts.py
+    analytics.py
+    bootstrap.py
+    clients.py
+    metrics.py
+    normalization.py
+    sync.py
+tests/
+```
 
-## Quickstart
-
-### Backend
+## Run locally
 
 ```bash
-cd backend
 python -m venv .venv
 source .venv/bin/activate
 pip install -e .[dev]
-uvicorn app.main:app --reload
+streamlit run app.py
 ```
 
-### iOS app
+Then open the local Streamlit URL, go to **Settings / Data**, add an author, and run sync.
 
-Open/create an Xcode project and include files under `ios-app/` for main app + widget extension targets.
+## Configuration
+
+Environment variables:
+
+- `TP_DATABASE_URL` (default `sqlite:///./timpapers.db`)
+- `TP_OPENALEX_BASE_URL`
+- `TP_SEMANTICSCHOLAR_BASE_URL`
+- `TP_SEMANTICSCHOLAR_API_KEY`
+- `TP_REQUEST_TIMEOUT_SECONDS`
+
+## Migration notes
+
+- Removed backend API and scheduler/web-server runtime assumptions.
+- Removed iOS/Swift client code and frontend/backend split.
+- Preserved and refactored reusable domain logic (metrics, normalization, sync, alerting) into framework-agnostic Python modules under `src/timpapers/services`.
