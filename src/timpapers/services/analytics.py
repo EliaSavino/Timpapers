@@ -9,7 +9,8 @@ import pandas as pd
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from timpapers.models import Author, CitationSnapshot, Event, MetricSnapshot, Paper
+from timpapers.config import get_settings
+from timpapers.models import Author, AuthorMetricOverride, CitationSnapshot, Event, MetricSnapshot, Paper
 from timpapers.services.metrics import compute_h_index, compute_i10_index, hindex_frontier
 from timpapers.services.sync import get_metric_inputs
 
@@ -21,6 +22,7 @@ class DashboardMetrics:
     total_citations: int
     h_index: int
     i10_index: int
+    h_index_source: str
     total_papers: int
     gain_7d: int
     gain_30d: int
@@ -46,11 +48,71 @@ def ensure_author(db: Session, name: str, openalex_id: str) -> Author:
     return author
 
 
+def get_active_author(db: Session) -> Author | None:
+    """Return the configured author record, creating it when configuration is present."""
+
+    settings = get_settings()
+    configured_name = settings.author_name.strip()
+    if not configured_name:
+        authors = list_authors(db)
+        return authors[0] if authors else None
+
+    author = (
+        db.execute(select(Author).where(Author.full_name == configured_name).order_by(Author.id.desc()))
+        .scalars()
+        .first()
+    )
+    if author is not None:
+        return author
+
+    author = Author(full_name=configured_name, openalex_id=None)
+    db.add(author)
+    db.commit()
+    db.refresh(author)
+    return author
+
+
+def get_metric_override(db: Session, author_id: int) -> AuthorMetricOverride | None:
+    """Return any stored manual metric override for one author."""
+
+    return db.execute(select(AuthorMetricOverride).where(AuthorMetricOverride.author_id == author_id)).scalar_one_or_none()
+
+
+def save_metric_override(
+    db: Session,
+    author_id: int,
+    *,
+    source: str,
+    h_index: int | None,
+    i10_index: int | None = None,
+) -> AuthorMetricOverride | None:
+    """Create, update, or clear a metric override for one author."""
+
+    override = get_metric_override(db, author_id)
+    if h_index is None and i10_index is None:
+        if override is not None:
+            db.delete(override)
+            db.commit()
+        return None
+
+    if override is None:
+        override = AuthorMetricOverride(author_id=author_id)
+        db.add(override)
+
+    override.source = source
+    override.h_index = h_index
+    override.i10_index = i10_index
+    db.commit()
+    db.refresh(override)
+    return override
+
+
 def get_dashboard_metrics(db: Session, author_id: int) -> DashboardMetrics:
     """Compute current metrics and recent gains for one author."""
 
     papers = db.execute(select(Paper).where(Paper.author_id == author_id)).scalars().all()
     counts = [p.citation_count for p in papers]
+    override = get_metric_override(db, author_id)
     now = datetime.now(timezone.utc)
 
     snapshots = db.execute(
@@ -68,10 +130,26 @@ def get_dashboard_metrics(db: Session, author_id: int) -> DashboardMetrics:
     prior7 = by_day.get((now - timedelta(days=7)).date(), latest)
     prior30 = by_day.get((now - timedelta(days=30)).date(), latest)
 
+    computed_h_index = compute_h_index(counts)
+    computed_i10_index = compute_i10_index(counts)
+    effective_h_index = override.h_index if override is not None and override.h_index is not None else computed_h_index
+    effective_i10_index = override.i10_index if override is not None and override.i10_index is not None else computed_i10_index
+    settings = get_settings()
+    current_author = db.get(Author, author_id)
+    default_source = (
+        "Best DOI source"
+        if current_author is not None
+        and settings.author_bibliography_url
+        and current_author.full_name == settings.author_name.strip()
+        else "OpenAlex"
+    )
+    h_index_source = override.source if override is not None and override.h_index is not None else default_source
+
     return DashboardMetrics(
         total_citations=sum(counts),
-        h_index=compute_h_index(counts),
-        i10_index=compute_i10_index(counts),
+        h_index=effective_h_index,
+        i10_index=effective_i10_index,
+        h_index_source=h_index_source,
         total_papers=len(papers),
         gain_7d=max(0, latest - prior7),
         gain_30d=max(0, latest - prior30),

@@ -1,0 +1,17 @@
+Metadata-Version: 2.4
+Name: timpapers
+Version: 0.2.0
+Summary: Streamlit bibliometrics dashboard for publication and citation tracking
+Requires-Python: >=3.12
+Requires-Dist: streamlit>=1.44
+Requires-Dist: plotly>=5.22
+Requires-Dist: pandas>=2.2
+Requires-Dist: pydantic>=2.7
+Requires-Dist: pydantic-settings>=2.3
+Requires-Dist: sqlalchemy>=2.0
+Requires-Dist: httpx>=0.27
+Provides-Extra: dev
+Requires-Dist: pytest>=8.2; extra == "dev"
+Requires-Dist: pytest-cov>=5.0; extra == "dev"
+Requires-Dist: mypy>=1.10; extra == "dev"
+Requires-Dist: ruff>=0.5; extra == "dev"

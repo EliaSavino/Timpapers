@@ -10,8 +10,9 @@ import streamlit as st
 
 sys.path.append(str(Path(__file__).resolve().parent.parent / "src"))
 
+from timpapers.config import get_settings
 from timpapers.database import session_scope
-from timpapers.services.analytics import ensure_author, list_authors
+from timpapers.services.analytics import ensure_author, get_active_author, get_metric_override, save_metric_override
 from timpapers.services.bootstrap import refresh_author_data
 from timpapers.services.clients import OpenAlexClient
 
@@ -24,43 +25,106 @@ def search_openalex_author(query: str) -> list[dict[str, object]]:
 
 
 st.header("Settings / Data")
-st.caption("Minimal setup: choose an author, save, and sync.")
+st.caption("Single-author mode: the bibliography file is the source of truth, and DOI lookups enrich each paper.")
 
-name = st.text_input("Author name", placeholder="e.g., Jane Doe")
-if name:
-    candidates = search_openalex_author(name)
-else:
-    candidates = []
+settings = get_settings()
+config_path = Path(__file__).resolve().parent.parent / "author_config.toml"
+legacy_mode = st.query_params.get("legacy") == "1"
 
-selected_candidate = None
-if candidates:
-    option_map = {
-        f"{c.get('display_name')} · works={c.get('works_count', 0)} · citations={c.get('cited_by_count', 0)}": c
-        for c in candidates
-    }
-    selected_label = st.selectbox("OpenAlex match", list(option_map.keys()))
-    selected_candidate = option_map[selected_label]
+st.markdown(f"Config file: [author_config.toml]({config_path})")
+st.code(
+    "[author]\n"
+    'name = "Timothy Noel"\n'
+    'bibliography_url = "https://github.com/Noel-Research-Group/NRG-bibliography/blob/main/publications.bib"\n\n'
+    "[app]\n"
+    'crossref_mailto = "you@example.com"\n',
+    language="toml",
+)
 
-if st.button("Save author", type="primary", disabled=selected_candidate is None):
-    candidate = selected_candidate
-    assert candidate is not None
-    with session_scope() as db:
-        author = ensure_author(
-            db,
-            name=str(candidate.get("display_name", "Unknown")),
-            openalex_id=str(candidate.get("id", "")),
-        )
-    st.success(f"Saved {author.full_name} (ID {author.id})")
+if not settings.author_name.strip() or not settings.author_bibliography_url.strip():
+    st.warning("The config file is incomplete. Add the author name and bibliography URL, then reload the app.")
+    st.stop()
+
+st.write(f"Configured author: `{settings.author_name}`")
+st.write(f"Bibliography URL: `{settings.author_bibliography_url}`")
+st.caption("Crossref, OpenAlex, and Semantic Scholar are queried DOI by DOI. The highest citation count is kept for each paper.")
 
 with session_scope() as db:
-    authors = list_authors(db)
+    target = get_active_author(db)
 
-if authors:
-    target = st.selectbox("Author to sync", authors, format_func=lambda a: f"{a.full_name} (#{a.id})")
-    if st.button("Run sync now"):
-        with st.spinner("Refreshing papers and metrics..."):
+if target is None:
+    st.error("The configured author could not be initialized.")
+    st.stop()
+
+if st.button("Run sync now", type="primary"):
+    try:
+        with st.spinner("Refreshing papers from the bibliography and DOI sources..."):
             with session_scope() as db:
                 summary, generated = refresh_author_data(db, target.id)
-        st.success(f"Sync complete: {summary.synced_papers} papers updated, {generated} new events.")
-else:
-    st.info("No authors saved yet.")
+        st.cache_data.clear()
+        st.success(f"Sync complete: {summary.synced_papers} bibliography entries updated, {generated} new events.")
+    except ValueError as exc:
+        st.error(str(exc))
+
+with session_scope() as db:
+    metric_override = get_metric_override(db, target.id)
+
+st.subheader("Metric override")
+st.caption("Use this when Google Scholar or another source is more current than Crossref.")
+default_h_index = metric_override.h_index if metric_override is not None and metric_override.h_index is not None else 0
+override_enabled = st.checkbox("Use external h-index override", value=metric_override is not None and metric_override.h_index is not None)
+override_source = st.text_input(
+    "Override source",
+    value=metric_override.source if metric_override is not None else "Google Scholar",
+    disabled=not override_enabled,
+)
+override_h_index = st.number_input(
+    "Override h-index",
+    min_value=0,
+    value=default_h_index,
+    step=1,
+    disabled=not override_enabled,
+)
+if st.button("Save metric override"):
+    with session_scope() as db:
+        save_metric_override(
+            db,
+            target.id,
+            source=override_source or "External source",
+            h_index=int(override_h_index) if override_enabled else None,
+        )
+    st.cache_data.clear()
+    if override_enabled:
+        st.success(f"Saved h-index override: {int(override_h_index)} from {override_source or 'External source'}.")
+    else:
+        st.success("Cleared external metric override.")
+
+if legacy_mode:
+    st.subheader("Legacy OpenAlex Controls")
+    st.caption("This section is hidden by default. It is retained only for older author records.")
+    name = st.text_input("Legacy author name", placeholder="e.g., Jane Doe")
+    if name:
+        candidates = search_openalex_author(name)
+    else:
+        candidates = []
+
+    selected_candidate = None
+    if candidates:
+        option_map = {
+            f"{c.get('display_name')} · works={c.get('works_count', 0)} · citations={c.get('cited_by_count', 0)}": c
+            for c in candidates
+        }
+        selected_label = st.selectbox("OpenAlex match", list(option_map.keys()))
+        selected_candidate = option_map[selected_label]
+
+    if st.button("Save legacy author", disabled=selected_candidate is None):
+        candidate = selected_candidate
+        assert candidate is not None
+        with session_scope() as db:
+            author = ensure_author(
+                db,
+                name=str(candidate.get("display_name", "Unknown")),
+                openalex_id=str(candidate.get("id", "")),
+            )
+        st.cache_data.clear()
+        st.success(f"Saved legacy author {author.full_name} (ID {author.id})")

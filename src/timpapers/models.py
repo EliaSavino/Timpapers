@@ -22,6 +22,26 @@ class Author(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
     papers: Mapped[list[Paper]] = relationship(back_populates="author", cascade="all, delete-orphan")
+    metric_override: Mapped[AuthorMetricOverride | None] = relationship(
+        back_populates="author",
+        cascade="all, delete-orphan",
+        uselist=False,
+    )
+
+
+class AuthorMetricOverride(Base):
+    """Optional external metric overrides for one author."""
+
+    __tablename__ = "author_metric_overrides"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    author_id: Mapped[int] = mapped_column(ForeignKey("authors.id"), unique=True, index=True)
+    source: Mapped[str] = mapped_column(String(80), default="Google Scholar")
+    h_index: Mapped[int | None] = mapped_column(Integer)
+    i10_index: Mapped[int | None] = mapped_column(Integer)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    author: Mapped[Author] = relationship(back_populates="metric_override")
 
 
 class Paper(Base):

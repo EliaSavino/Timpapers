@@ -1,10 +1,11 @@
 # TimPapers
 
-TimPapers is now a **pure Streamlit** application for tracking publication performance for one or more researchers.
+TimPapers is now a **pure Streamlit** application for tracking publication performance for a curated researcher bibliography.
 
 ## What it does
 
-- Pulls author/publication data from **OpenAlex**.
+- Pulls the publication list from a curated public **BibTeX bibliography**.
+- Enriches DOI-backed records with **Crossref**, **OpenAlex**, and **Semantic Scholar**, keeping the highest citation count seen for each paper.
 - Stores papers, citation snapshots, and metric snapshots in SQLite (or any SQLAlchemy-supported DB URL).
 - Computes core bibliometrics: total citations, h-index, i10-index, and h-index frontier groupings.
 - Presents a polished dashboard with metrics, trends, analysis charts, and drill-down tables.
@@ -43,13 +44,17 @@ pip install -e .[dev]
 streamlit run app.py
 ```
 
-Then open the local Streamlit URL, go to **Settings / Data**, add an author, and run sync.
+Then open the local Streamlit URL, edit `author_config.toml` with the tracked scientist's name and public bibliography URL, and run sync from **Settings / Data**.
 
 ## Configuration
 
 Environment variables:
 
 - `TP_DATABASE_URL` (default `sqlite:///./timpapers.db`)
+- `TP_AUTHOR_NAME`
+- `TP_AUTHOR_BIBLIOGRAPHY_URL`
+- `TP_CROSSREF_BASE_URL`
+- `TP_CROSSREF_MAILTO`
 - `TP_OPENALEX_BASE_URL`
 - `TP_SEMANTICSCHOLAR_BASE_URL`
 - `TP_SEMANTICSCHOLAR_API_KEY`

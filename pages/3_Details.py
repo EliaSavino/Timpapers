@@ -9,25 +9,30 @@ import streamlit as st
 
 sys.path.append(str(Path(__file__).resolve().parent.parent / "src"))
 
+from timpapers.config import get_settings
 from timpapers.database import session_scope
-from timpapers.services.analytics import list_authors, papers_dataframe
+from timpapers.services.analytics import get_active_author, papers_dataframe
 
 
-@st.cache_data(ttl=300)
 def load_details(author_id: int):
     with session_scope() as db:
         return papers_dataframe(db, author_id)
 
 
 st.header("Details")
-with session_scope() as db:
-    authors = list_authors(db)
-if not authors:
-    st.info("No authors found yet.")
+settings = get_settings()
+if not settings.author_name.strip() or not settings.author_bibliography_url.strip():
+    st.info("Add the author name and bibliography URL to the config file before using this page.")
     st.stop()
 
-selected = st.sidebar.selectbox("Author", authors, format_func=lambda a: f"{a.full_name} (#{a.id})")
-papers = load_details(selected.id)
+with session_scope() as db:
+    author = get_active_author(db)
+if author is None:
+    st.info("No configured author is available yet.")
+    st.stop()
+
+st.sidebar.markdown(f"**Author**  \n{author.full_name}")
+papers = load_details(author.id)
 
 if papers.empty:
     st.info("No papers synced yet for this author.")
@@ -39,7 +44,7 @@ if group != "all":
 
 st.dataframe(
     papers[["title", "year", "venue", "citations", "citation_gain_30d", "group", "delta_to_next_h"]],
-    use_container_width=True,
+    width="stretch",
     hide_index=True,
 )
 
