@@ -85,4 +85,10 @@ with right:
 
 st.subheader("Most cited papers")
 preview = papers.sort_values("citations", ascending=False).head(10)
-st.dataframe(preview[["title", "year", "venue", "citations", "group"]], width="stretch", hide_index=True)
+preview = preview.copy()
+preview["share_pct"] = (preview["citation_share"] * 100).round(1)
+st.dataframe(
+    preview[["title", "year", "venue", "citations", "share_pct", "metric_role", "group"]],
+    width="stretch",
+    hide_index=True,
+)

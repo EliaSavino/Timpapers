@@ -11,7 +11,7 @@ sys.path.append(str(Path(__file__).resolve().parent.parent / "src"))
 
 from timpapers.config import get_settings
 from timpapers.database import session_scope
-from timpapers.plotting.charts import make_frontier_chart, make_hindex_trend
+from timpapers.plotting.charts import make_frontier_chart, make_hindex_line_scatter, make_hindex_trend
 from timpapers.services.analytics import get_active_author, metric_history_dataframe, papers_dataframe
 
 
@@ -37,4 +37,12 @@ history, papers = load_analysis(author.id)
 
 st.caption("h-index trend is based on synced bibliography and DOI-source citation snapshots.")
 st.plotly_chart(make_hindex_trend(history), width="stretch", key="hindex_trend_chart")
+
+st.subheader("Paper contribution")
+st.caption(
+    "The first chart shows how much each ranked paper adds to total citations. "
+    "The scatter separates papers that sit above the h-index line from those below it."
+)
+
 st.plotly_chart(make_frontier_chart(papers), width="stretch", key="frontier_chart")
+st.plotly_chart(make_hindex_line_scatter(papers), width="stretch", key="hindex_line_scatter")

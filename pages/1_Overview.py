@@ -44,15 +44,19 @@ st.subheader("Highlights")
 col1, col2 = st.columns(2)
 with col1:
     st.markdown("**Top cited**")
+    top_cited = papers.sort_values("citations", ascending=False).head(5).copy()
+    top_cited["share_pct"] = (top_cited["citation_share"] * 100).round(1)
     st.dataframe(
-        papers.sort_values("citations", ascending=False).head(5)[["title", "citations", "year"]],
+        top_cited[["title", "citations", "share_pct", "metric_role", "year"]],
         hide_index=True,
         width="stretch",
     )
 with col2:
     st.markdown("**Fastest growing (last sync)**")
+    fastest = papers.sort_values("citation_gain_30d", ascending=False).head(5).copy()
+    fastest["share_pct"] = (fastest["citation_share"] * 100).round(1)
     st.dataframe(
-        papers.sort_values("citation_gain_30d", ascending=False).head(5)[["title", "citation_gain_30d", "citations"]],
+        fastest[["title", "citation_gain_30d", "citations", "share_pct", "metric_role"]],
         hide_index=True,
         width="stretch",
     )

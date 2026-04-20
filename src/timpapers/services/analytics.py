@@ -169,8 +169,17 @@ def papers_dataframe(db: Session, author_id: int) -> pd.DataFrame:
                 "venue",
                 "citations",
                 "citation_gain_30d",
+                "rank",
                 "group",
                 "delta_to_next_h",
+                "citation_share",
+                "cumulative_citations",
+                "cumulative_share",
+                "counts_for_h_index",
+                "counts_for_i10",
+                "h_index_value",
+                "h_index_line_gap",
+                "metric_role",
             ]
         )
 
@@ -189,7 +198,27 @@ def papers_dataframe(db: Session, author_id: int) -> pd.DataFrame:
             for p in papers
         ]
     )
-    return paper_df.merge(ranked, how="left", on=["paper_id", "title", "citations"])
+    merged = paper_df.merge(ranked, how="left", on=["paper_id", "title", "citations"])
+    merged = merged.sort_values("rank").reset_index(drop=True)
+
+    total_citations = int(merged["citations"].sum())
+    h_index = int(analysis["h_index"])
+
+    if total_citations:
+        merged["citation_share"] = merged["citations"] / total_citations
+        merged["cumulative_citations"] = merged["citations"].cumsum()
+        merged["cumulative_share"] = merged["cumulative_citations"] / total_citations
+    else:
+        merged["citation_share"] = 0.0
+        merged["cumulative_citations"] = 0
+        merged["cumulative_share"] = 0.0
+
+    merged["counts_for_h_index"] = merged["rank"] <= h_index
+    merged["counts_for_i10"] = merged["citations"] >= 10
+    merged["h_index_value"] = h_index
+    merged["h_index_line_gap"] = merged["citations"] - merged["rank"]
+    merged["metric_role"] = merged.apply(_metric_role, axis=1)
+    return merged
 
 
 def metric_history_dataframe(db: Session, author_id: int) -> pd.DataFrame:
@@ -248,3 +277,13 @@ def metrics_dict(db: Session, author_id: int) -> dict[str, int]:
     """Dictionary wrapper for simple cache-friendly serialization."""
 
     return asdict(get_dashboard_metrics(db, author_id))
+
+
+def _metric_role(row: pd.Series) -> str:
+    """Map one paper to the metric it currently supports most directly."""
+
+    if bool(row["counts_for_h_index"]):
+        return "h-core"
+    if bool(row["counts_for_i10"]):
+        return "i10 support"
+    return "emerging"

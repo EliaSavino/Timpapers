@@ -42,8 +42,23 @@ group = st.segmented_control("Frontier group", options=["all", "contributor", "s
 if group != "all":
     papers = papers[papers["group"] == group]
 
+table_df = papers.copy()
+table_df["share_pct"] = (table_df["citation_share"] * 100).round(1)
+
 st.dataframe(
-    papers[["title", "year", "venue", "citations", "citation_gain_30d", "group", "delta_to_next_h"]],
+    table_df[
+        [
+            "title",
+            "year",
+            "venue",
+            "citations",
+            "share_pct",
+            "citation_gain_30d",
+            "metric_role",
+            "group",
+            "delta_to_next_h",
+        ]
+    ],
     width="stretch",
     hide_index=True,
 )
