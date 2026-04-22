@@ -319,6 +319,7 @@ def _store_source_metric_snapshots(db: Session, author_id: int, papers: list[Pap
 async def _fetch_doi_metadata(entries: list[BibliographyEntry]) -> dict[str, dict[str, dict[str, object] | None]]:
     """Fetch DOI metadata from Crossref, OpenAlex, and Semantic Scholar."""
 
+    settings = get_settings()
     dois = [entry.doi for entry in entries if entry.doi]
     if not dois:
         return {}
@@ -326,7 +327,7 @@ async def _fetch_doi_metadata(entries: list[BibliographyEntry]) -> dict[str, dic
     crossref_results, openalex_results, semanticscholar_results, scholarly_results = await asyncio.gather(
         CrossrefClient().fetch_works(dois),
         OpenAlexClient().fetch_works_by_doi(dois),
-        SemanticScholarClient().fetch_works_by_doi(dois),
+        SemanticScholarClient().fetch_works_by_doi(dois) if settings.semanticscholar_enabled else _empty_source_results(dois),
         ScholarlyClient().fetch_works_by_doi(dois),
     )
     merged: dict[str, dict[str, dict[str, object] | None]] = {}
@@ -338,6 +339,12 @@ async def _fetch_doi_metadata(entries: list[BibliographyEntry]) -> dict[str, dic
             "scholarly": scholarly_results.get(doi),
         }
     return merged
+
+
+async def _empty_source_results(dois: list[str]) -> dict[str, dict[str, object] | None]:
+    """Return an empty result mapping for a disabled DOI source."""
+
+    return {doi.lower(): None for doi in dois if doi}
 
 
 def _citation_value(normalized: dict[str, object]) -> int:

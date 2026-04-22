@@ -5,6 +5,7 @@ bibliography_url = "https://github.com/Noel-Research-Group/NRG-bibliography/blob
 [app]
 openalex_api_key = ""
 crossref_mailto = "you@example.com"
+semanticscholar_enabled = true
 scholarly_enabled = false
 scholarly_proxy_mode = "free_proxies"
 scholarly_proxy_http = ""

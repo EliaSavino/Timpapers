@@ -45,6 +45,7 @@ st.code(
     "[app]\n"
     'openalex_api_key = ""\n'
     'crossref_mailto = "you@example.com"\n'
+    "semanticscholar_enabled = true\n"
     "scholarly_enabled = false\n"
     'scholarly_proxy_mode = "free_proxies"\n'
     'scholarly_proxy_http = ""\n'
@@ -62,11 +63,13 @@ if not settings.author_name.strip() or not settings.author_bibliography_url.stri
 
 st.write(f"Configured author: `{settings.author_name}`")
 st.write(f"Bibliography URL: `{settings.author_bibliography_url}`")
-st.caption("Crossref, OpenAlex, and Semantic Scholar are queried DOI by DOI with backoff and low concurrency. Google Scholar scraping is optional and disabled by default.")
+st.caption("Crossref and OpenAlex are queried DOI by DOI with backoff and low concurrency. Semantic Scholar and Google Scholar can be enabled or disabled from secret config.")
 if not settings.crossref_mailto.strip():
     st.warning("Set `crossref_mailto` in the config file to use Crossref's polite pool and reduce 429 responses.")
 if not (settings.openalex_api_key or "").strip():
     st.warning("Set `openalex_api_key` in the config file. OpenAlex now expects an API key for production use.")
+st.write(f"Semantic Scholar enabled: `{settings.semanticscholar_enabled}`")
+st.write(f"Google Scholar enabled: `{settings.scholarly_enabled}`")
 if settings.scholarly_enabled:
     st.info(f"scholarly proxy mode: `{settings.scholarly_proxy_mode}`")
 

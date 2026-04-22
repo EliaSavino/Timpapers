@@ -24,6 +24,7 @@ class Settings(BaseSettings):
     openalex_api_key: str | None = None
     crossref_base_url: str = "https://api.crossref.org"
     crossref_mailto: str | None = None
+    semanticscholar_enabled: bool = True
     scholarly_enabled: bool = False
     scholarly_proxy_mode: str = "free_proxies"
     scholarly_proxy_http: str | None = None
@@ -68,6 +69,7 @@ def _load_file_settings() -> dict[str, Any]:
     if isinstance(app_cfg, dict):
         openalex_api_key = app_cfg.get("openalex_api_key")
         crossref_mailto = app_cfg.get("crossref_mailto")
+        semanticscholar_enabled = app_cfg.get("semanticscholar_enabled")
         scholarly_enabled = app_cfg.get("scholarly_enabled")
         scholarly_proxy_mode = app_cfg.get("scholarly_proxy_mode")
         scholarly_proxy_http = app_cfg.get("scholarly_proxy_http")
@@ -80,6 +82,8 @@ def _load_file_settings() -> dict[str, Any]:
             values["openalex_api_key"] = openalex_api_key
         if isinstance(crossref_mailto, str):
             values["crossref_mailto"] = crossref_mailto
+        if isinstance(semanticscholar_enabled, bool):
+            values["semanticscholar_enabled"] = semanticscholar_enabled
         if isinstance(scholarly_enabled, bool):
             values["scholarly_enabled"] = scholarly_enabled
         if isinstance(scholarly_proxy_mode, str):
@@ -111,7 +115,7 @@ def get_settings() -> Settings:
     updates = {
         key: value
         for key, value in file_settings.items()
-        if getattr(settings, key) in ("", None)
+        if key not in settings.model_fields_set
     }
     if not updates:
         return settings
