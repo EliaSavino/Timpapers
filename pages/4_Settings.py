@@ -28,26 +28,47 @@ st.header("Settings / Data")
 st.caption("Single-author mode: the bibliography file is the source of truth, and DOI lookups enrich each paper.")
 
 settings = get_settings()
-config_path = Path(__file__).resolve().parent.parent / "author_config.toml"
+workspace_root = Path(__file__).resolve().parent.parent
+secret_config_path = workspace_root / "author_config.secret.toml"
+example_config_path = workspace_root / "author_config.example.toml"
+streamlit_secret_path = workspace_root / ".streamlit" / "secrets.toml"
 legacy_mode = st.query_params.get("legacy") == "1"
 
-st.markdown(f"Config file: [author_config.toml]({config_path})")
+st.markdown(f"Example config: [author_config.example.toml]({example_config_path})")
+st.write("Secret config locations:")
+st.write(f"`{secret_config_path}`")
+st.write(f"`{streamlit_secret_path}`")
 st.code(
     "[author]\n"
     'name = "Timothy Noel"\n'
     'bibliography_url = "https://github.com/Noel-Research-Group/NRG-bibliography/blob/main/publications.bib"\n\n'
     "[app]\n"
-    'crossref_mailto = "you@example.com"\n',
+    'openalex_api_key = ""\n'
+    'crossref_mailto = "you@example.com"\n'
+    "scholarly_enabled = false\n"
+    'scholarly_proxy_mode = "free_proxies"\n'
+    'scholarly_proxy_http = ""\n'
+    'scholarly_proxy_https = ""\n'
+    'scholarly_tor_cmd = "tor"\n'
+    "scholarly_tor_sock_port = 9050\n"
+    "scholarly_tor_control_port = 9051\n"
+    'scholarly_tor_password = ""\n',
     language="toml",
 )
 
 if not settings.author_name.strip() or not settings.author_bibliography_url.strip():
-    st.warning("The config file is incomplete. Add the author name and bibliography URL, then reload the app.")
+    st.warning("No secret config was found. Create `author_config.secret.toml` or `.streamlit/secrets.toml`, then reload the app.")
     st.stop()
 
 st.write(f"Configured author: `{settings.author_name}`")
 st.write(f"Bibliography URL: `{settings.author_bibliography_url}`")
-st.caption("Crossref, OpenAlex, and Semantic Scholar are queried DOI by DOI. The highest citation count is kept for each paper.")
+st.caption("Crossref, OpenAlex, and Semantic Scholar are queried DOI by DOI with backoff and low concurrency. Google Scholar scraping is optional and disabled by default.")
+if not settings.crossref_mailto.strip():
+    st.warning("Set `crossref_mailto` in the config file to use Crossref's polite pool and reduce 429 responses.")
+if not (settings.openalex_api_key or "").strip():
+    st.warning("Set `openalex_api_key` in the config file. OpenAlex now expects an API key for production use.")
+if settings.scholarly_enabled:
+    st.info(f"scholarly proxy mode: `{settings.scholarly_proxy_mode}`")
 
 with session_scope() as db:
     target = get_active_author(db)

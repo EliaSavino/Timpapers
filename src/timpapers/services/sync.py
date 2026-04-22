@@ -11,19 +11,33 @@ from timpapers.config import get_settings
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from timpapers.models import Author, CitationSnapshot, MetricSnapshot, Paper
+from timpapers.models import (
+    Author,
+    CitationSnapshot,
+    MetricSnapshot,
+    MetricSourceSnapshot,
+    Paper,
+    PaperSourceMetric,
+)
 from timpapers.services.bibliography import BibliographyEntry
-from timpapers.services.clients import BibliographyClient, CrossrefClient, OpenAlexClient, SemanticScholarClient
+from timpapers.services.clients import BibliographyClient, CrossrefClient, OpenAlexClient, ScholarlyClient, SemanticScholarClient
 from timpapers.services.metrics import PaperMetricInput, compute_h_index, compute_i10_index
 from timpapers.services.normalization import (
     normalize_bibliography_entry,
     normalize_crossref_work,
     normalize_openalex_doi_work,
     normalize_openalex_work,
+    normalize_scholarly_work,
     normalize_semanticscholar_work,
 )
 
 logger = logging.getLogger(__name__)
+SOURCE_HIGHEST = "highest"
+SOURCE_CROSSREF = "crossref"
+SOURCE_OPENALEX = "openalex"
+SOURCE_SEMANTIC_SCHOLAR = "semanticscholar"
+SOURCE_SCHOLARLY = "scholarly"
+TRACKED_SOURCES = (SOURCE_CROSSREF, SOURCE_OPENALEX, SOURCE_SEMANTIC_SCHOLAR, SOURCE_SCHOLARLY)
 
 
 @dataclass(slots=True)
@@ -80,8 +94,11 @@ def _sync_author_from_openalex(db: Session, author: Author) -> int:
                 last_seen_citation_count=0,
             )
             db.add(paper)
+            db.flush()
         _apply_paper_update(paper, normalized)
+        _upsert_source_metric(db, paper, SOURCE_OPENALEX, int(normalized["citation_count"]))
         db.flush()
+        _refresh_paper_citation_count(db, paper, fallback_count=int(normalized["citation_count"]))
         db.add(CitationSnapshot(paper_id=paper.id, citation_count=paper.citation_count))
         count += 1
 
@@ -99,7 +116,7 @@ def _sync_author_from_bibliography(db: Session, author: Author, bibliography_url
     seen_keys: set[str] = set()
     count = 0
     for entry in entries:
-        normalized = _normalize_bibliography_work(entry, doi_metadata)
+        normalized, source_counts = _normalize_bibliography_work(entry, doi_metadata)
         external_work_id = str(normalized["external_work_id"])
         seen_keys.add(external_work_id)
 
@@ -115,9 +132,12 @@ def _sync_author_from_bibliography(db: Session, author: Author, bibliography_url
                 last_seen_citation_count=0,
             )
             db.add(paper)
+            db.flush()
 
         _apply_paper_update(paper, normalized)
+        _sync_source_metrics(db, paper, source_counts)
         db.flush()
+        _refresh_paper_citation_count(db, paper, fallback_count=int(normalized.get("citation_count") or 0))
         db.add(CitationSnapshot(paper_id=paper.id, citation_count=paper.citation_count))
         count += 1
 
@@ -133,27 +153,40 @@ def _sync_author_from_bibliography(db: Session, author: Author, bibliography_url
 def _normalize_bibliography_work(
     entry: BibliographyEntry,
     doi_metadata: dict[str, dict[str, dict[str, object] | None]],
-) -> dict[str, object]:
+) -> tuple[dict[str, object], dict[str, int]]:
     """Merge DOI-based metadata sources for one bibliography entry."""
 
     merged = normalize_bibliography_entry(entry)
     if not entry.doi:
-        return merged
+        return merged, {}
 
     source_payloads = doi_metadata.get(entry.doi.lower(), {})
     candidates = [merged]
+    source_counts: dict[str, int] = {}
 
     crossref_work = source_payloads.get("crossref")
     if isinstance(crossref_work, dict):
-        candidates.append(normalize_crossref_work(crossref_work, entry))
+        crossref_normalized = normalize_crossref_work(crossref_work, entry)
+        candidates.append(crossref_normalized)
+        source_counts[SOURCE_CROSSREF] = _citation_value(crossref_normalized)
 
     openalex_work = source_payloads.get("openalex")
     if isinstance(openalex_work, dict):
-        candidates.append(normalize_openalex_doi_work(openalex_work, entry))
+        openalex_normalized = normalize_openalex_doi_work(openalex_work, entry)
+        candidates.append(openalex_normalized)
+        source_counts[SOURCE_OPENALEX] = _citation_value(openalex_normalized)
 
     semanticscholar_work = source_payloads.get("semanticscholar")
     if isinstance(semanticscholar_work, dict):
-        candidates.append(normalize_semanticscholar_work(semanticscholar_work, entry))
+        semanticscholar_normalized = normalize_semanticscholar_work(semanticscholar_work, entry)
+        candidates.append(semanticscholar_normalized)
+        source_counts[SOURCE_SEMANTIC_SCHOLAR] = _citation_value(semanticscholar_normalized)
+
+    scholarly_work = source_payloads.get("scholarly")
+    if isinstance(scholarly_work, dict):
+        scholarly_normalized = normalize_scholarly_work(scholarly_work, entry)
+        candidates.append(scholarly_normalized)
+        source_counts[SOURCE_SCHOLARLY] = _citation_value(scholarly_normalized)
 
     best = candidates[0]
     for candidate in candidates[1:]:
@@ -167,7 +200,7 @@ def _normalize_bibliography_work(
             if value not in ("", None):
                 merged[field] = value
                 break
-    return merged
+    return merged, source_counts
 
 
 def _find_existing_paper(db: Session, author_id: int, external_work_id: str, doi: object) -> Paper | None:
@@ -196,18 +229,55 @@ def _find_existing_paper(db: Session, author_id: int, external_work_id: str, doi
 
 
 def _apply_paper_update(paper: Paper, normalized: dict[str, object]) -> None:
-    """Apply normalized metadata and citation state to an existing paper row."""
+    """Apply normalized metadata fields to an existing paper row."""
 
-    raw_citations = normalized.get("citation_count")
-    next_citations = paper.citation_count if raw_citations is None else int(raw_citations)
-    paper.last_seen_citation_count = paper.citation_count
-    paper.citation_count = next_citations
     paper.title = str(normalized["title"])
     paper.year = int(normalized["year"]) if normalized["year"] else None
     paper.doi = normalized["doi"] if isinstance(normalized["doi"], str) or normalized["doi"] is None else None
     paper.venue = normalized["venue"] if isinstance(normalized["venue"], str) or normalized["venue"] is None else None
     paper.author_list = str(normalized["author_list"])
     paper.openalex_work_id = str(normalized["external_work_id"])
+
+
+def _sync_source_metrics(db: Session, paper: Paper, source_counts: dict[str, int]) -> None:
+    """Upsert current citation counts for each source on one paper."""
+
+    for source, citation_count in source_counts.items():
+        _upsert_source_metric(db, paper, source, citation_count)
+
+
+def _upsert_source_metric(db: Session, paper: Paper, source: str, citation_count: int) -> None:
+    """Create or update one paper/source citation row."""
+
+    metric = db.execute(
+        select(PaperSourceMetric).where(
+            PaperSourceMetric.paper_id == paper.id,
+            PaperSourceMetric.source == source,
+        )
+    ).scalar_one_or_none()
+    if metric is None:
+        metric = PaperSourceMetric(
+            paper_id=paper.id,
+            source=source,
+            citation_count=0,
+            first_seen_citation_count=0,
+            last_seen_citation_count=0,
+        )
+        db.add(metric)
+
+    metric.last_seen_citation_count = metric.citation_count
+    metric.citation_count = citation_count
+    if metric.first_seen_citation_count == 0 and citation_count:
+        metric.first_seen_citation_count = citation_count
+
+
+def _refresh_paper_citation_count(db: Session, paper: Paper, *, fallback_count: int) -> None:
+    """Refresh the paper-level citation total from persisted per-source metrics."""
+
+    source_metrics = db.execute(select(PaperSourceMetric).where(PaperSourceMetric.paper_id == paper.id)).scalars().all()
+    next_citations = max((metric.citation_count for metric in source_metrics), default=fallback_count)
+    paper.last_seen_citation_count = paper.citation_count
+    paper.citation_count = next_citations
     if paper.first_seen_citation_count == 0 and next_citations:
         paper.first_seen_citation_count = next_citations
 
@@ -226,6 +296,24 @@ def _store_metric_snapshot(db: Session, author_id: int) -> None:
             paper_count=len(citations),
         )
     )
+    _store_source_metric_snapshots(db, author_id, author_papers)
+
+
+def _store_source_metric_snapshots(db: Session, author_id: int, papers: list[Paper]) -> None:
+    """Persist per-source aggregate metric snapshots after sync completion."""
+
+    for source in (SOURCE_HIGHEST, *TRACKED_SOURCES):
+        counts = _counts_for_source(papers, source)
+        db.add(
+            MetricSourceSnapshot(
+                author_id=author_id,
+                source=source,
+                total_citations=sum(counts),
+                h_index=compute_h_index(counts),
+                i10_index=compute_i10_index(counts),
+                paper_count=len(papers),
+            )
+        )
 
 
 async def _fetch_doi_metadata(entries: list[BibliographyEntry]) -> dict[str, dict[str, dict[str, object] | None]]:
@@ -235,10 +323,11 @@ async def _fetch_doi_metadata(entries: list[BibliographyEntry]) -> dict[str, dic
     if not dois:
         return {}
 
-    crossref_results, openalex_results, semanticscholar_results = await asyncio.gather(
+    crossref_results, openalex_results, semanticscholar_results, scholarly_results = await asyncio.gather(
         CrossrefClient().fetch_works(dois),
         OpenAlexClient().fetch_works_by_doi(dois),
         SemanticScholarClient().fetch_works_by_doi(dois),
+        ScholarlyClient().fetch_works_by_doi(dois),
     )
     merged: dict[str, dict[str, dict[str, object] | None]] = {}
     for doi in dict.fromkeys(doi.lower() for doi in dois):
@@ -246,6 +335,7 @@ async def _fetch_doi_metadata(entries: list[BibliographyEntry]) -> dict[str, dic
             "crossref": crossref_results.get(doi),
             "openalex": openalex_results.get(doi),
             "semanticscholar": semanticscholar_results.get(doi),
+            "scholarly": scholarly_results.get(doi),
         }
     return merged
 
@@ -255,6 +345,19 @@ def _citation_value(normalized: dict[str, object]) -> int:
 
     value = normalized.get("citation_count")
     return int(value) if isinstance(value, int) else 0
+
+
+def _counts_for_source(papers: list[Paper], source: str) -> list[int]:
+    """Extract current citation counts for one source across an author's papers."""
+
+    if source == SOURCE_HIGHEST:
+        return [paper.citation_count for paper in papers]
+
+    counts: list[int] = []
+    for paper in papers:
+        metric = next((metric for metric in paper.source_metrics if metric.source == source), None)
+        counts.append(metric.citation_count if metric is not None else 0)
+    return counts
 
 
 def get_metric_inputs(papers: list[Paper]) -> list[PaperMetricInput]:

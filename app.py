@@ -13,33 +13,35 @@ from timpapers.config import get_settings
 from timpapers.database import session_scope
 from timpapers.plotting.charts import make_citation_trend, make_yearly_output_chart
 from timpapers.services.analytics import (
+    available_citation_sources,
+    citation_source_label,
     get_active_author,
-    metric_history_dataframe,
-    metrics_dict,
-    papers_dataframe,
+    metric_history_dataframe_for_source,
+    metrics_dict_for_source,
+    papers_dataframe_for_source,
 )
 from timpapers.services.bootstrap import initialize_database
 
 
-def load_metrics(author_id: int) -> dict[str, int]:
+def load_metrics(author_id: int, citation_source: str) -> dict[str, int | str]:
     """Fetch metric cards for one author."""
 
     with session_scope() as db:
-        return metrics_dict(db, author_id)
+        return metrics_dict_for_source(db, author_id, citation_source)
 
 
-def load_history(author_id: int):
+def load_history(author_id: int, citation_source: str):
     """Fetch metric history for one author."""
 
     with session_scope() as db:
-        return metric_history_dataframe(db, author_id)
+        return metric_history_dataframe_for_source(db, author_id, citation_source)
 
 
-def load_papers(author_id: int):
+def load_papers(author_id: int, citation_source: str):
     """Fetch paper-level data for one author."""
 
     with session_scope() as db:
-        return papers_dataframe(db, author_id)
+        return papers_dataframe_for_source(db, author_id, citation_source)
 
 
 def _configured_author() -> tuple[int | None, str]:
@@ -65,10 +67,23 @@ if author_id is None:
     st.warning(author_name)
     st.stop()
 st.sidebar.markdown(f"**Author**  \n{author_name}")
+with session_scope() as db:
+    available_sources = available_citation_sources(db, author_id)
+default_source = "highest"
+current_source = st.session_state.get("citation_source", default_source)
+if current_source not in available_sources:
+    current_source = default_source
+citation_source = st.sidebar.selectbox(
+    "Citation source",
+    available_sources,
+    index=available_sources.index(current_source),
+    format_func=citation_source_label,
+    key="citation_source",
+)
 
-metrics = load_metrics(author_id)
-history = load_history(author_id)
-papers = load_papers(author_id)
+metrics = load_metrics(author_id, citation_source)
+history = load_history(author_id, citation_source)
+papers = load_papers(author_id, citation_source)
 
 col1, col2, col3, col4 = st.columns(4)
 col1.metric("Total citations", f"{metrics['total_citations']:,}", delta=metrics["gain_30d"])

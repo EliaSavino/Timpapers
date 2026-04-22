@@ -11,12 +11,12 @@ sys.path.append(str(Path(__file__).resolve().parent.parent / "src"))
 
 from timpapers.config import get_settings
 from timpapers.database import session_scope
-from timpapers.services.analytics import get_active_author, papers_dataframe
+from timpapers.services.analytics import available_citation_sources, citation_source_label, get_active_author, papers_dataframe_for_source
 
 
-def load_details(author_id: int):
+def load_details(author_id: int, citation_source: str):
     with session_scope() as db:
-        return papers_dataframe(db, author_id)
+        return papers_dataframe_for_source(db, author_id, citation_source)
 
 
 st.header("Details")
@@ -32,7 +32,20 @@ if author is None:
     st.stop()
 
 st.sidebar.markdown(f"**Author**  \n{author.full_name}")
-papers = load_details(author.id)
+with session_scope() as db:
+    available_sources = available_citation_sources(db, author.id)
+default_source = "highest"
+current_source = st.session_state.get("citation_source", default_source)
+if current_source not in available_sources:
+    current_source = default_source
+citation_source = st.sidebar.selectbox(
+    "Citation source",
+    available_sources,
+    index=available_sources.index(current_source),
+    format_func=citation_source_label,
+    key="citation_source",
+)
+papers = load_details(author.id, citation_source)
 
 if papers.empty:
     st.info("No papers synced yet for this author.")
@@ -52,6 +65,11 @@ st.dataframe(
             "year",
             "venue",
             "citations",
+            "citations_highest",
+            "citations_crossref",
+            "citations_openalex",
+            "citations_semanticscholar",
+            "citations_scholarly",
             "share_pct",
             "citation_gain_30d",
             "metric_role",

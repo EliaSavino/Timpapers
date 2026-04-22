@@ -113,6 +113,35 @@ def normalize_semanticscholar_work(work: dict[str, Any], entry: BibliographyEntr
     }
 
 
+def normalize_scholarly_work(work: dict[str, Any], entry: BibliographyEntry) -> dict[str, object]:
+    """Normalize a scholarly Google Scholar publication using bibliography fallback values."""
+
+    bib = work.get("bib", {})
+    if not isinstance(bib, dict):
+        bib = {}
+
+    author_list = entry.author_list
+    raw_author = bib.get("author")
+    if isinstance(raw_author, list) and raw_author:
+        author_list = ", ".join(str(author) for author in raw_author if author)
+    elif isinstance(raw_author, str) and raw_author.strip():
+        author_list = raw_author
+
+    venue = bib.get("venue") or bib.get("journal") or entry.venue
+    title = bib.get("title") or work.get("title") or entry.title
+    year = _scholarly_year(bib.get("pub_year") or bib.get("year")) or entry.year
+
+    return {
+        "title": str(title or "Untitled"),
+        "year": year,
+        "doi": entry.doi,
+        "venue": str(venue) if venue else None,
+        "author_list": author_list,
+        "external_work_id": f"bib:{entry.key}",
+        "citation_count": int(work.get("num_citations") or 0),
+    }
+
+
 def _format_crossref_author(author: dict[str, Any]) -> str:
     given = str(author.get("given") or "").strip()
     family = str(author.get("family") or "").strip()
@@ -145,3 +174,12 @@ def _semanticscholar_doi(work: dict[str, Any]) -> str | None:
         return None
     doi = external_ids.get("DOI")
     return str(doi) if doi else None
+
+
+def _scholarly_year(value: Any) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None

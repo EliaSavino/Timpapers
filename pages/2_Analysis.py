@@ -12,12 +12,18 @@ sys.path.append(str(Path(__file__).resolve().parent.parent / "src"))
 from timpapers.config import get_settings
 from timpapers.database import session_scope
 from timpapers.plotting.charts import make_frontier_chart, make_hindex_line_scatter, make_hindex_trend
-from timpapers.services.analytics import get_active_author, metric_history_dataframe, papers_dataframe
+from timpapers.services.analytics import (
+    available_citation_sources,
+    citation_source_label,
+    get_active_author,
+    metric_history_dataframe_for_source,
+    papers_dataframe_for_source,
+)
 
 
-def load_analysis(author_id: int):
+def load_analysis(author_id: int, citation_source: str):
     with session_scope() as db:
-        return metric_history_dataframe(db, author_id), papers_dataframe(db, author_id)
+        return metric_history_dataframe_for_source(db, author_id, citation_source), papers_dataframe_for_source(db, author_id, citation_source)
 
 
 st.header("Analysis")
@@ -33,7 +39,20 @@ if author is None:
     st.stop()
 
 st.sidebar.markdown(f"**Author**  \n{author.full_name}")
-history, papers = load_analysis(author.id)
+with session_scope() as db:
+    available_sources = available_citation_sources(db, author.id)
+default_source = "highest"
+current_source = st.session_state.get("citation_source", default_source)
+if current_source not in available_sources:
+    current_source = default_source
+citation_source = st.sidebar.selectbox(
+    "Citation source",
+    available_sources,
+    index=available_sources.index(current_source),
+    format_func=citation_source_label,
+    key="citation_source",
+)
+history, papers = load_analysis(author.id, citation_source)
 
 st.caption("h-index trend is based on synced bibliography and DOI-source citation snapshots.")
 st.plotly_chart(make_hindex_trend(history), width="stretch", key="hindex_trend_chart")

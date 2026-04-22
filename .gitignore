@@ -4,3 +4,6 @@ __pycache__/
 .venv/
 .pytest_cache/
 .idea
+author_config.toml
+author_config.secret.toml
+.streamlit/secrets.toml

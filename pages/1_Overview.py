@@ -11,12 +11,23 @@ sys.path.append(str(Path(__file__).resolve().parent.parent / "src"))
 
 from timpapers.config import get_settings
 from timpapers.database import session_scope
-from timpapers.services.analytics import events_dataframe, get_active_author, metrics_dict, papers_dataframe
+from timpapers.services.analytics import (
+    available_citation_sources,
+    citation_source_label,
+    events_dataframe,
+    get_active_author,
+    metrics_dict_for_source,
+    papers_dataframe_for_source,
+)
 
 
-def load_overview(author_id: int):
+def load_overview(author_id: int, citation_source: str):
     with session_scope() as db:
-        return metrics_dict(db, author_id), papers_dataframe(db, author_id), events_dataframe(db, author_id, limit=10)
+        return (
+            metrics_dict_for_source(db, author_id, citation_source),
+            papers_dataframe_for_source(db, author_id, citation_source),
+            events_dataframe(db, author_id, limit=10),
+        )
 
 
 st.header("Overview")
@@ -32,7 +43,20 @@ if author is None:
     st.stop()
 
 st.sidebar.markdown(f"**Author**  \n{author.full_name}")
-metrics, papers, events = load_overview(author.id)
+with session_scope() as db:
+    available_sources = available_citation_sources(db, author.id)
+default_source = "highest"
+current_source = st.session_state.get("citation_source", default_source)
+if current_source not in available_sources:
+    current_source = default_source
+citation_source = st.sidebar.selectbox(
+    "Citation source",
+    available_sources,
+    index=available_sources.index(current_source),
+    format_func=citation_source_label,
+    key="citation_source",
+)
+metrics, papers, events = load_overview(author.id, citation_source)
 
 cards = st.columns(3)
 cards[0].metric("Total citations", f"{metrics['total_citations']:,}")

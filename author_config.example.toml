@@ -1,0 +1,15 @@
+[author]
+name = "Timothy Noel"
+bibliography_url = "https://github.com/Noel-Research-Group/NRG-bibliography/blob/main/publications.bib"
+
+[app]
+openalex_api_key = ""
+crossref_mailto = "you@example.com"
+scholarly_enabled = false
+scholarly_proxy_mode = "free_proxies"
+scholarly_proxy_http = ""
+scholarly_proxy_https = ""
+scholarly_tor_cmd = "tor"
+scholarly_tor_sock_port = 9050
+scholarly_tor_control_port = 9051
+scholarly_tor_password = ""

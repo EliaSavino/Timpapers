@@ -66,6 +66,24 @@ class Paper(Base):
 
     author: Mapped[Author] = relationship(back_populates="papers")
     snapshots: Mapped[list[CitationSnapshot]] = relationship(back_populates="paper", cascade="all, delete-orphan")
+    source_metrics: Mapped[list[PaperSourceMetric]] = relationship(back_populates="paper", cascade="all, delete-orphan")
+
+
+class PaperSourceMetric(Base):
+    """Current citation count for one paper from one source."""
+
+    __tablename__ = "paper_source_metrics"
+    __table_args__ = (UniqueConstraint("paper_id", "source", name="uq_paper_source_metric"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    paper_id: Mapped[int] = mapped_column(ForeignKey("papers.id"), index=True)
+    source: Mapped[str] = mapped_column(String(50), index=True)
+    citation_count: Mapped[int] = mapped_column(Integer, default=0)
+    first_seen_citation_count: Mapped[int] = mapped_column(Integer, default=0)
+    last_seen_citation_count: Mapped[int] = mapped_column(Integer, default=0)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    paper: Mapped[Paper] = relationship(back_populates="source_metrics")
 
 
 class CitationSnapshot(Base):
@@ -88,6 +106,21 @@ class MetricSnapshot(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     author_id: Mapped[int] = mapped_column(ForeignKey("authors.id"), index=True)
+    total_citations: Mapped[int] = mapped_column(Integer)
+    h_index: Mapped[int] = mapped_column(Integer)
+    i10_index: Mapped[int] = mapped_column(Integer)
+    paper_count: Mapped[int] = mapped_column(Integer)
+    captured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+
+
+class MetricSourceSnapshot(Base):
+    """Historic computed metric snapshot for one citation source."""
+
+    __tablename__ = "metric_source_snapshots"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    author_id: Mapped[int] = mapped_column(ForeignKey("authors.id"), index=True)
+    source: Mapped[str] = mapped_column(String(50), index=True)
     total_citations: Mapped[int] = mapped_column(Integer)
     h_index: Mapped[int] = mapped_column(Integer)
     i10_index: Mapped[int] = mapped_column(Integer)
