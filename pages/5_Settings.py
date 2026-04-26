@@ -41,13 +41,15 @@ st.write(f"`{streamlit_secret_path}`")
 st.code(
     "[author]\n"
     'name = "Timothy Noel"\n'
-    'bibliography_url = "https://github.com/Noel-Research-Group/NRG-bibliography/blob/main/publications.bib"\n\n'
+    'bibliography_url = "https://github.com/Noel-Research-Group/NRG-bibliography/blob/main/publications.bib"\n'
+    'google_scholar_id = "eC9TUPMAAAAJ"\n\n'
     "[app]\n"
     'openalex_api_key = ""\n'
     'crossref_mailto = "you@example.com"\n'
     "semanticscholar_enabled = true\n"
+    'semanticscholar_api_key = ""\n'
     "scholarly_enabled = false\n"
-    'scholarly_proxy_mode = "free_proxies"\n'
+    'scholarly_proxy_mode = "none"\n'
     'scholarly_proxy_http = ""\n'
     'scholarly_proxy_https = ""\n'
     'scholarly_tor_cmd = "tor"\n'
@@ -63,12 +65,14 @@ if not settings.author_name.strip() or not settings.author_bibliography_url.stri
 
 st.write(f"Configured author: `{settings.author_name}`")
 st.write(f"Bibliography URL: `{settings.author_bibliography_url}`")
+st.write(f"Google Scholar author ID configured: `{bool((settings.author_google_scholar_id or '').strip())}`")
 st.caption("Crossref and OpenAlex are queried DOI by DOI with backoff and low concurrency. Semantic Scholar and Google Scholar can be enabled or disabled from secret config.")
 if not settings.crossref_mailto.strip():
     st.warning("Set `crossref_mailto` in the config file to use Crossref's polite pool and reduce 429 responses.")
 if not (settings.openalex_api_key or "").strip():
     st.warning("Set `openalex_api_key` in the config file. OpenAlex now expects an API key for production use.")
 st.write(f"Semantic Scholar enabled: `{settings.semanticscholar_enabled}`")
+st.write(f"Semantic Scholar API key configured: `{bool((settings.semanticscholar_api_key or '').strip())}`")
 st.write(f"Google Scholar enabled: `{settings.scholarly_enabled}`")
 if settings.scholarly_enabled:
     st.info(f"scholarly proxy mode: `{settings.scholarly_proxy_mode}`")

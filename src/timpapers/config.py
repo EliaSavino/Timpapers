@@ -20,13 +20,14 @@ class Settings(BaseSettings):
     database_url: str = Field(default="sqlite:///./timpapers.db")
     author_name: str = ""
     author_bibliography_url: str = ""
+    author_google_scholar_id: str | None = None
     openalex_base_url: str = "https://api.openalex.org"
     openalex_api_key: str | None = None
     crossref_base_url: str = "https://api.crossref.org"
     crossref_mailto: str | None = None
     semanticscholar_enabled: bool = True
     scholarly_enabled: bool = False
-    scholarly_proxy_mode: str = "free_proxies"
+    scholarly_proxy_mode: str = "none"
     scholarly_proxy_http: str | None = None
     scholarly_proxy_https: str | None = None
     scholarly_tor_cmd: str | None = None
@@ -62,14 +63,18 @@ def _load_file_settings() -> dict[str, Any]:
     if isinstance(author_cfg, dict):
         name = author_cfg.get("name")
         bibliography_url = author_cfg.get("bibliography_url")
+        google_scholar_id = author_cfg.get("google_scholar_id")
         if isinstance(name, str):
             values["author_name"] = name
         if isinstance(bibliography_url, str):
             values["author_bibliography_url"] = bibliography_url
+        if isinstance(google_scholar_id, str):
+            values["author_google_scholar_id"] = google_scholar_id
     if isinstance(app_cfg, dict):
         openalex_api_key = app_cfg.get("openalex_api_key")
         crossref_mailto = app_cfg.get("crossref_mailto")
         semanticscholar_enabled = app_cfg.get("semanticscholar_enabled")
+        semanticscholar_api_key = app_cfg.get("semanticscholar_api_key")
         scholarly_enabled = app_cfg.get("scholarly_enabled")
         scholarly_proxy_mode = app_cfg.get("scholarly_proxy_mode")
         scholarly_proxy_http = app_cfg.get("scholarly_proxy_http")
@@ -84,6 +89,8 @@ def _load_file_settings() -> dict[str, Any]:
             values["crossref_mailto"] = crossref_mailto
         if isinstance(semanticscholar_enabled, bool):
             values["semanticscholar_enabled"] = semanticscholar_enabled
+        if isinstance(semanticscholar_api_key, str):
+            values["semanticscholar_api_key"] = semanticscholar_api_key
         if isinstance(scholarly_enabled, bool):
             values["scholarly_enabled"] = scholarly_enabled
         if isinstance(scholarly_proxy_mode, str):

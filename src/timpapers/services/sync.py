@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
+import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
@@ -32,6 +34,7 @@ from timpapers.services.normalization import (
 )
 
 logger = logging.getLogger(__name__)
+_TITLE_TOKEN_PATTERN = re.compile(r"[^a-z0-9]+")
 SOURCE_HIGHEST = "highest"
 SOURCE_CROSSREF = "crossref"
 SOURCE_OPENALEX = "openalex"
@@ -111,7 +114,7 @@ def _sync_author_from_bibliography(db: Session, author: Author, bibliography_url
     entries = asyncio.run(BibliographyClient().fetch_entries(bibliography_url))
     if not entries:
         raise ValueError("Bibliography sync returned no entries; refusing to overwrite local data")
-    doi_metadata = asyncio.run(_fetch_doi_metadata(entries))
+    doi_metadata, scholarly_extra_publications = asyncio.run(_fetch_doi_metadata(entries))
 
     seen_keys: set[str] = set()
     count = 0
@@ -141,9 +144,35 @@ def _sync_author_from_bibliography(db: Session, author: Author, bibliography_url
         db.add(CitationSnapshot(paper_id=paper.id, citation_count=paper.citation_count))
         count += 1
 
+    for publication in scholarly_extra_publications:
+        normalized, source_counts = _normalize_scholarly_extra_work(publication)
+        external_work_id = str(normalized["external_work_id"])
+        seen_keys.add(external_work_id)
+
+        paper = _find_existing_paper(db, author.id, external_work_id, normalized["doi"])
+        if paper is None:
+            paper = Paper(
+                author_id=author.id,
+                openalex_work_id=external_work_id,
+                title=str(normalized["title"]),
+                author_list=str(normalized["author_list"]),
+                citation_count=0,
+                first_seen_citation_count=0,
+                last_seen_citation_count=0,
+            )
+            db.add(paper)
+            db.flush()
+
+        _apply_paper_update(paper, normalized)
+        _sync_source_metrics(db, paper, source_counts)
+        db.flush()
+        _refresh_paper_citation_count(db, paper, fallback_count=int(normalized.get("citation_count") or 0))
+        db.add(CitationSnapshot(paper_id=paper.id, citation_count=paper.citation_count))
+        count += 1
+
     stale_papers = db.execute(select(Paper).where(Paper.author_id == author.id)).scalars().all()
     for paper in stale_papers:
-        if paper.openalex_work_id not in seen_keys:
+        if paper.openalex_work_id not in seen_keys and not paper.openalex_work_id.startswith("scholarly:"):
             db.delete(paper)
 
     db.flush()
@@ -201,6 +230,34 @@ def _normalize_bibliography_work(
                 merged[field] = value
                 break
     return merged, source_counts
+
+
+def _normalize_scholarly_extra_work(publication: dict[str, object]) -> tuple[dict[str, object], dict[str, int]]:
+    """Normalize a Scholar-profile publication that is not present in the bibliography."""
+
+    bib = publication.get("bib", {})
+    if not isinstance(bib, dict):
+        bib = {}
+
+    title = str(bib.get("title") or publication.get("title") or "Untitled")
+    author = bib.get("author")
+    if isinstance(author, list):
+        author_list = ", ".join(str(value) for value in author if value)
+    else:
+        author_list = str(author or "")
+    venue = bib.get("venue") or bib.get("journal")
+    citation_count = int(publication.get("num_citations") or 0)
+    external_id = publication.get("author_pub_id") or hashlib.sha1(title.encode("utf-8")).hexdigest()
+    normalized = {
+        "title": title,
+        "year": _int_or_none(bib.get("pub_year") or bib.get("year")),
+        "doi": None,
+        "venue": str(venue) if venue else None,
+        "author_list": author_list,
+        "external_work_id": f"scholarly:{external_id}",
+        "citation_count": citation_count,
+    }
+    return normalized, {SOURCE_SCHOLARLY: citation_count}
 
 
 def _find_existing_paper(db: Session, author_id: int, external_work_id: str, doi: object) -> Paper | None:
@@ -316,29 +373,54 @@ def _store_source_metric_snapshots(db: Session, author_id: int, papers: list[Pap
         )
 
 
-async def _fetch_doi_metadata(entries: list[BibliographyEntry]) -> dict[str, dict[str, dict[str, object] | None]]:
+async def _fetch_doi_metadata(
+    entries: list[BibliographyEntry],
+) -> tuple[dict[str, dict[str, dict[str, object] | None]], list[dict[str, object]]]:
     """Fetch DOI metadata from Crossref, OpenAlex, and Semantic Scholar."""
 
     settings = get_settings()
     dois = [entry.doi for entry in entries if entry.doi]
     if not dois:
-        return {}
+        return {}, []
+    scholarly_results_task = (
+        ScholarlyClient().fetch_profile_publications_by_title(
+            settings.author_google_scholar_id,
+            [entry.title for entry in entries if entry.title],
+        )
+        if settings.author_google_scholar_id
+        else ScholarlyClient().fetch_works_by_doi(dois)
+    )
 
     crossref_results, openalex_results, semanticscholar_results, scholarly_results = await asyncio.gather(
         CrossrefClient().fetch_works(dois),
         OpenAlexClient().fetch_works_by_doi(dois),
         SemanticScholarClient().fetch_works_by_doi(dois) if settings.semanticscholar_enabled else _empty_source_results(dois),
-        ScholarlyClient().fetch_works_by_doi(dois),
+        scholarly_results_task,
     )
+    scholarly_by_title: dict[str, dict[str, object] | None]
+    scholarly_extra_publications: list[dict[str, object]]
+    scholarly_profile_mode = hasattr(scholarly_results, "matched_by_title")
+    if scholarly_profile_mode:
+        scholarly_by_title = scholarly_results.matched_by_title
+        scholarly_extra_publications = scholarly_results.unmatched_publications
+    else:
+        scholarly_by_title = scholarly_results
+        scholarly_extra_publications = []
+
     merged: dict[str, dict[str, dict[str, object] | None]] = {}
     for doi in dict.fromkeys(doi.lower() for doi in dois):
+        entry = next((entry for entry in entries if entry.doi and entry.doi.lower() == doi), None)
         merged[doi] = {
             "crossref": crossref_results.get(doi),
             "openalex": openalex_results.get(doi),
             "semanticscholar": semanticscholar_results.get(doi),
-            "scholarly": scholarly_results.get(doi),
+            "scholarly": (
+                scholarly_by_title.get(entry.title)
+                if scholarly_profile_mode and entry is not None
+                else scholarly_by_title.get(doi)
+            ),
         }
-    return merged
+    return merged, scholarly_extra_publications
 
 
 async def _empty_source_results(dois: list[str]) -> dict[str, dict[str, object] | None]:
@@ -352,6 +434,23 @@ def _citation_value(normalized: dict[str, object]) -> int:
 
     value = normalized.get("citation_count")
     return int(value) if isinstance(value, int) else 0
+
+
+def _normalize_title(title: str) -> str:
+    """Normalize a paper title for stable Scholar-only keys."""
+
+    return _TITLE_TOKEN_PATTERN.sub(" ", title.lower()).strip()
+
+
+def _int_or_none(value: object) -> int | None:
+    """Parse optional integer metadata from Scholar."""
+
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _counts_for_source(papers: list[Paper], source: str) -> list[int]:

@@ -451,14 +451,14 @@ def _metric_role(row: pd.Series) -> str:
     return "emerging"
 
 
-def _paper_source_count_columns(paper: Paper) -> dict[str, int]:
+def _paper_source_count_columns(paper: Paper) -> dict[str, object]:
     """Expose per-source citation counts alongside the selected citation view."""
 
     source_counts = {metric.source: metric.citation_count for metric in paper.source_metrics}
     return {
         "citations_highest": paper.citation_count,
-        "citations_crossref": source_counts.get(SOURCE_CROSSREF, 0),
-        "citations_openalex": source_counts.get(SOURCE_OPENALEX, 0),
-        "citations_semanticscholar": source_counts.get(SOURCE_SEMANTIC_SCHOLAR, 0),
-        "citations_scholarly": source_counts.get(SOURCE_SCHOLARLY, 0),
+        "citations_crossref": source_counts.get(SOURCE_CROSSREF, pd.NA),
+        "citations_openalex": source_counts.get(SOURCE_OPENALEX, pd.NA),
+        "citations_semanticscholar": source_counts.get(SOURCE_SEMANTIC_SCHOLAR, pd.NA),
+        "citations_scholarly": source_counts.get(SOURCE_SCHOLARLY, pd.NA),
     }

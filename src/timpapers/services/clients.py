@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 import logging
+import re
 from collections.abc import Sequence
 from typing import Any
 from urllib.parse import quote
@@ -16,6 +18,15 @@ from timpapers.config import get_settings
 from timpapers.services.bibliography import BibliographyEntry, extract_bibliography_entries, to_raw_bibliography_url
 
 logger = logging.getLogger(__name__)
+_TITLE_TOKEN_PATTERN = re.compile(r"[^a-z0-9]+")
+
+
+@dataclass(slots=True)
+class ScholarlyProfileResult:
+    """Google Scholar profile publications matched and unmatched against requested titles."""
+
+    matched_by_title: dict[str, dict[str, Any] | None]
+    unmatched_publications: list[dict[str, Any]]
 
 
 async def _request_json(
@@ -251,6 +262,7 @@ class SemanticScholarClient:
         self.base_url = settings.semanticscholar_base_url
         self.timeout = settings.request_timeout_seconds
         self.api_key = settings.semanticscholar_api_key
+        self.request_interval_seconds = 1.05
 
     async def search_author(self, full_name: str) -> list[dict[str, Any]]:
         """Search Semantic Scholar author candidates."""
@@ -284,29 +296,27 @@ class SemanticScholarClient:
             return {}
 
         headers = {"x-api-key": self.api_key} if self.api_key else {}
-        semaphore = asyncio.Semaphore(2 if self.api_key else 1)
         params = {"fields": "title,venue,year,authors,citationCount,externalIds,paperId"}
 
         async with httpx.AsyncClient(timeout=self.timeout, headers=headers) as client:
-            async def fetch_one(doi: str) -> tuple[str, dict[str, Any] | None]:
+            results: dict[str, dict[str, Any] | None] = {}
+            for index, doi in enumerate(unique_dois):
                 paper_id = f"DOI:{doi}"
-                async with semaphore:
-                    try:
-                        payload = await _request_json(
-                            client,
-                            f"{self.base_url}/paper/{quote(paper_id, safe='')}",
-                            params=params,
-                            service="Semantic Scholar",
-                            not_found_ok=True,
-                        )
-                    except httpx.HTTPError as exc:
-                        logger.warning("Semantic Scholar fetch failed for doi=%s error=%s", doi, exc)
-                        return doi, None
-                await asyncio.sleep(0.25)
-                return doi, payload if isinstance(payload, dict) else None
-
-            results = await asyncio.gather(*(fetch_one(doi) for doi in unique_dois))
-        return dict(results)
+                try:
+                    payload = await _request_json(
+                        client,
+                        f"{self.base_url}/paper/{quote(paper_id, safe='')}",
+                        params=params,
+                        service="Semantic Scholar",
+                        not_found_ok=True,
+                    )
+                except httpx.HTTPError as exc:
+                    logger.warning("Semantic Scholar fetch failed for doi=%s error=%s", doi, exc)
+                    payload = None
+                results[doi] = payload if isinstance(payload, dict) else None
+                if index < len(unique_dois) - 1:
+                    await asyncio.sleep(self.request_interval_seconds)
+        return results
 
     async def enrich_citations(self, paper_ids: Sequence[str]) -> dict[str, int]:
         """Fetch citation counts for known Semantic Scholar paper IDs."""
@@ -315,16 +325,18 @@ class SemanticScholarClient:
             return {}
         headers = {"x-api-key": self.api_key} if self.api_key else {}
         fields = "paperId,citationCount"
-        async with httpx.AsyncClient(timeout=self.timeout, headers=headers) as client:
-            tasks = [client.get(f"{self.base_url}/paper/{pid}", params={"fields": fields}) for pid in paper_ids]
-            responses = await asyncio.gather(*tasks)
         enriched: dict[str, int] = {}
-        for res in responses:
-            if res.status_code == 200:
-                obj = res.json()
-                enriched[obj.get("paperId", "")] = int(obj.get("citationCount", 0))
-            else:
-                logger.warning("Semantic Scholar enrichment failed: status=%s", res.status_code)
+        async with httpx.AsyncClient(timeout=self.timeout, headers=headers) as client:
+            unique_ids = list(dict.fromkeys(pid for pid in paper_ids if pid))
+            for index, paper_id in enumerate(unique_ids):
+                res = await client.get(f"{self.base_url}/paper/{paper_id}", params={"fields": fields})
+                if res.status_code == 200:
+                    obj = res.json()
+                    enriched[obj.get("paperId", "")] = int(obj.get("citationCount", 0))
+                else:
+                    logger.warning("Semantic Scholar enrichment failed: status=%s", res.status_code)
+                if index < len(unique_ids) - 1:
+                    await asyncio.sleep(self.request_interval_seconds)
         return enriched
 
 
@@ -362,11 +374,30 @@ class ScholarlyClient:
             results[doi] = await asyncio.to_thread(self._fetch_one, scholar_api, doi)
         return results
 
+    async def fetch_profile_publications_by_title(
+        self,
+        scholar_id: str | None,
+        titles: Sequence[str],
+    ) -> ScholarlyProfileResult:
+        """Fetch one Scholar profile and match its publications to requested titles."""
+
+        unique_titles = list(dict.fromkeys(title for title in titles if title))
+        if not unique_titles or not scholar_id or not self.enabled:
+            return ScholarlyProfileResult(matched_by_title={}, unmatched_publications=[])
+
+        try:
+            from scholarly import ProxyGenerator, scholarly as scholar_api
+        except ImportError:
+            logger.info("scholarly is not installed; skipping Google Scholar profile enrichment")
+            return ScholarlyProfileResult(matched_by_title={}, unmatched_publications=[])
+
+        self._configure_proxy(scholar_api, ProxyGenerator)
+        return await asyncio.to_thread(self._fetch_profile_publications_by_title, scholar_api, scholar_id, unique_titles)
+
     def _configure_proxy(self, scholar_api: Any, proxy_generator_cls: Any) -> None:
         """Configure scholarly proxying using documented ProxyGenerator modes."""
 
         if not self.enabled:
-            scholar_api.use_proxy(None)
             return
 
         pg = proxy_generator_cls()
@@ -391,7 +422,6 @@ class ScholarlyClient:
             elif mode == "free_proxies":
                 success = pg.FreeProxies()
             else:
-                scholar_api.use_proxy(None)
                 return
         except Exception as exc:  # pragma: no cover - third-party proxy setup behavior
             logger.warning("scholarly proxy setup failed mode=%s error=%s", mode, exc)
@@ -399,10 +429,12 @@ class ScholarlyClient:
 
         proxy_works = success.get("proxy_works") if isinstance(success, dict) else bool(success)
         if proxy_works:
-            scholar_api.use_proxy(pg)
+            try:
+                scholar_api.use_proxy(pg)
+            except Exception as exc:  # pragma: no cover - third-party proxy setup behavior
+                logger.warning("scholarly proxy activation failed mode=%s error=%s", mode, exc)
         else:
             logger.warning("scholarly proxy mode=%s did not initialize; continuing without proxy", mode)
-            scholar_api.use_proxy(None)
 
     def _fetch_one(self, scholar_api: Any, doi: str) -> dict[str, Any] | None:
         """Run one DOI query against Google Scholar."""
@@ -420,3 +452,49 @@ class ScholarlyClient:
         except Exception as exc:  # pragma: no cover - third-party scraper behavior
             logger.warning("scholarly search failed for doi=%s error=%s", doi, exc)
             return None
+
+    def _fetch_profile_publications_by_title(
+        self,
+        scholar_api: Any,
+        scholar_id: str,
+        titles: Sequence[str],
+    ) -> ScholarlyProfileResult:
+        """Run one Google Scholar author profile fetch and match publications by title."""
+
+        requested = {_normalize_title(title): title for title in titles}
+        results = {title: None for title in titles}
+        try:
+            author = scholar_api.search_author_id(scholar_id)
+            filled_author = scholar_api.fill(author)
+        except Exception as exc:  # pragma: no cover - third-party scraper behavior
+            logger.warning("scholarly profile fetch failed scholar_id=%s error=%s", scholar_id, exc)
+            return ScholarlyProfileResult(matched_by_title=results, unmatched_publications=[])
+
+        publications = filled_author.get("publications", []) if isinstance(filled_author, dict) else []
+        if not isinstance(publications, list):
+            return ScholarlyProfileResult(matched_by_title=results, unmatched_publications=[])
+
+        by_title: dict[str, dict[str, Any]] = {}
+        unmatched: list[dict[str, Any]] = []
+        for publication in publications:
+            if not isinstance(publication, dict):
+                continue
+            bib = publication.get("bib", {})
+            if not isinstance(bib, dict):
+                bib = {}
+            title = bib.get("title") or publication.get("title")
+            if isinstance(title, str) and title:
+                normalized_title = _normalize_title(title)
+                by_title[normalized_title] = publication
+                if normalized_title not in requested:
+                    unmatched.append(publication)
+
+        for normalized_title, original_title in requested.items():
+            results[original_title] = by_title.get(normalized_title)
+        return ScholarlyProfileResult(matched_by_title=results, unmatched_publications=unmatched)
+
+
+def _normalize_title(title: str) -> str:
+    """Normalize a paper title for Scholar/BibTeX matching."""
+
+    return _TITLE_TOKEN_PATTERN.sub(" ", title.lower()).strip()
